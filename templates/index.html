@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WCD Similarity Search</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0fff0;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            text-align: center;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        button {
+            background-color: #98fb98;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        .result {
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+        ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        li {
+            display: flex; /* Align items horizontally */
+            align-items: center;
+            margin: 15px 0;
+        }
+        img {
+            max-width: 100px;
+            max-height: 100px;
+            margin-right: 15px; /* Spacing between image and text */
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .info {
+            display: flex;
+            flex-direction: column;
+            text-align: left; /* Align text to the left */
+        }
+        .filename {
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .similarity {
+            font-size: 14px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WCD Similarity Search</h1>
+        <form method="POST" enctype="multipart/form-data" action="/recommendations/">
+            <input type="file" name="file" accept="image/*" required>
+            <button type="submit">Search</button>
+        </form>
+        {% if recommendations %}
+        <div class="result">
+            <h2>Top Recommendations</h2>
+            <ul>
+                {% for rec in recommendations %}
+                <li>
+                    <img src="{{ rec.image_url }}" alt="Recommended Image">
+                    <div class="info">
+                        <div class="filename">{{ rec.filename }}</div>
+                        <div class="similarity">Similarity: {{ rec.similarity | round(4) }}</div>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% elif error %}
+        <div class="error">
+            Error: {{ error }}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
