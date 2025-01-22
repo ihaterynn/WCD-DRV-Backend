@@ -1,7 +1,7 @@
 import os
 import sys
-import json
 import torch
+import mysql.connector
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +11,12 @@ from PIL import Image
 import numpy as np
 from urllib.parse import quote, unquote
 from torchvision import transforms as T
+from dotenv import load_dotenv
 import uvicorn
+import json
+
+# Load environment variables from the .env file
+load_dotenv()
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -26,13 +31,12 @@ app.add_middleware(
 )
 
 # Paths
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))  # Directory of inference.py
-ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))  # Root directory of HECT-Net WCD
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 UPLOAD_FOLDER = os.path.join(ROOT_DIR, "uploads")
-EMBEDDINGS_PATH = os.path.join(ROOT_DIR, "embeddings.json")
 TEMPLATES_DIR = os.path.join(ROOT_DIR, "templates")
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
-MODEL_PATH = os.path.join(ROOT_DIR, "best_ehfrnet.pth")  # Correct path to model file
+MODEL_PATH = os.path.join(ROOT_DIR, "best_ehfrnet.pth")
 
 # Ensure required directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -49,7 +53,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 
 class WallpaperRecommender:
-    def __init__(self, model_path=MODEL_PATH, embeddings_path=EMBEDDINGS_PATH, device=None):
+    def __init__(self, model_path=MODEL_PATH, device=None):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
@@ -74,15 +78,6 @@ class WallpaperRecommender:
             T.ToTensor()
         ])
 
-        # Load precomputed embeddings
-        self.embeddings = self._load_embeddings(embeddings_path)
-
-    def _load_embeddings(self, path):
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Embeddings file not found: {path}")
-        with open(path, "r") as f:
-            return json.load(f)
-
     def _compute_embedding(self, img_path):
         img = Image.open(img_path).convert("RGB")
         x = self.transform(img).unsqueeze(0).to(self.device)
@@ -90,24 +85,81 @@ class WallpaperRecommender:
             emb = self.model.extract_features(x)
         return emb.cpu().numpy().flatten()
 
+    def _get_embeddings_from_db(self):
+        try:
+            # Connect to the MySQL database
+            conn = mysql.connector.connect(
+                host=os.getenv("DB_HOST", "localhost"),
+                user=os.getenv("DB_USER", "root"),
+                password=os.getenv("DB_PASSWORD", ""),
+                database=os.getenv("DB_NAME", "embeddings_db"),
+                port=int(os.getenv("DB_PORT", 3306))
+            )
+            print("Connected to the database successfully.\n")
+
+            cursor = conn.cursor(dictionary=True)
+
+            # Check the current database
+            cursor.execute("SELECT DATABASE();")
+            current_db = cursor.fetchone()
+            print(f"Currently connected to database: {current_db}\n")
+
+            # Query to fetch all embeddings
+            query = "SELECT filename, path, embedding, url FROM embeddings;"
+            cursor.execute(query)
+            results = cursor.fetchall()
+
+            # Print the results row by row for debugging
+            print("Fetched rows from database:")
+            for row in results:
+                print(f"Filename: {row['filename']}, URL: {row['url']}")
+
+            # Close the connection
+            cursor.close()
+            conn.close()
+
+            # Parse and return embeddings
+            parsed_results = []
+            for row in results:
+                try:
+                    parsed_results.append({
+                        "filename": row["filename"],
+                        "path": row["path"],
+                        "embedding": json.loads(row["embedding"]),
+                        "url": row["url"]
+                    })
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON for row {row['filename']}: {e}")
+
+            return parsed_results
+
+        except mysql.connector.Error as err:
+            print(f"Database error: {err}")
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+        return []
+
     def recommend(self, user_img_path, top_k=6):
         user_emb = self._compute_embedding(user_img_path)
+        embeddings = self._get_embeddings_from_db()
         similarities = []
 
-        for item in self.embeddings:
+        for item in embeddings:
             stock_emb = np.array(item["embedding"])
             similarity = self._cosine_similarity(user_emb, stock_emb)
+
+            # Debugging: Print the URL to confirm it's fetched correctly
+            print(f"Processing: {item['filename']}, URL: {item['url']}")
+
             similarities.append({
-                "path": item["path"],  # Path to the recommended image
-                "filename": item["filename"],  # Name of the recommended image file
-                "url": item.get("url", "#"),  # URL for the product page (default to "#")
-                "similarity": similarity  # Similarity score
+                "path": item["path"],
+                "filename": item["filename"],
+                "url": item.get("url", "#"),
+                "similarity": similarity
             })
 
-        # Sort by descending similarity and return top_k results
         similarities.sort(key=lambda x: x["similarity"], reverse=True)
         return similarities[:top_k]
-
 
     @staticmethod
     def _cosine_similarity(a, b):
@@ -123,29 +175,20 @@ recommender = WallpaperRecommender()
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index(request: Request):
-    """
-    Serve the index.html from the templates folder.
-    """
     return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.post("/recommendations/")
 async def get_recommendations(file: UploadFile = File(...)):
-    """
-    Process the uploaded file and return similarity recommendations.
-    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No selected file")
 
-    # Save user-uploaded file into 'uploads'
     file_path = os.path.join(UPLOAD_FOLDER, file.filename)
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # Get top recommendations
     recommendations = recommender.recommend(file_path, top_k=6)
 
-    # Format recommendations
     base_url = "http://127.0.0.1:5000"
     formatted_recommendations = []
     for item in recommendations:
@@ -153,19 +196,18 @@ async def get_recommendations(file: UploadFile = File(...)):
         formatted_recommendations.append({
             "filename": item["filename"],
             "image_url": f"{base_url}/dataset_image?file={encoded_path}",
-            "url": item["url"],  # Include the URL in the response
+            "url": item["url"],  # Ensure URL is passed to the frontend
             "similarity": item["similarity"]
         })
+
+    # Debugging: Print formatted recommendations
+    print(f"Formatted recommendations: {formatted_recommendations}")
 
     return {"recommendations": formatted_recommendations}
 
 
-
 @app.get("/dataset_image")
 async def dataset_image(file: str):
-    """
-    Serve images directly from the dataset path.
-    """
     image_path = unquote(file)
     image_path = os.path.normpath(os.path.abspath(image_path))
 
