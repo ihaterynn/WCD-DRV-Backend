@@ -3,3 +3,5 @@
 /wallpaper_data/
 
 embeddings.json
+
+.env
