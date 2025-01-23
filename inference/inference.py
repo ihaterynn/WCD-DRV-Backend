@@ -35,7 +35,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 UPLOAD_FOLDER = os.path.join(ROOT_DIR, "uploads")
 TEMPLATES_DIR = os.path.join(ROOT_DIR, "templates")
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+STATIC_DIR = os.path.join(ROOT_DIR, "static")
 MODEL_PATH = os.path.join(ROOT_DIR, "best_ehfrnet.pth")
 
 # Ensure required directories exist
