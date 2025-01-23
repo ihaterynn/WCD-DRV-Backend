@@ -9,11 +9,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all necessary project files and directories
-COPY inference.py /inference
-COPY best_ehfrnet.pth .
-COPY model/ model/
-COPY blocks/ blocks/
-COPY templates/ templates/
+COPY inference/inference.py ./inference.py
+COPY best_ehfrnet.pth ./best_ehfrnet.pth
+COPY model/ehfrnet.py ./model/ehfrnet.py
+COPY blocks/ ./blocks/
+COPY templates/ ./templates/
 
 # Expose the FastAPI app's default port
 EXPOSE 8000
