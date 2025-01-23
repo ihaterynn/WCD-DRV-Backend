@@ -5,19 +5,19 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # Copy the requirements file and install dependencies
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all necessary project files and directories
-COPY inference.py /app/
-COPY best_ehfrnet.pth /app/
-COPY embeddings.json /app/
-COPY model /app/model/
-COPY blocks /app/blocks/
-COPY templates /app/templates/
+COPY inference.py .
+COPY best_ehfrnet.pth .
+COPY embeddings.json .
+COPY model/ model/
+COPY blocks/ blocks/
+COPY templates/ templates/
 
-# Expose the Flask app's default port
-EXPOSE 5000
+# Expose the FastAPI app's default port
+EXPOSE 8000
 
 # Command to run the FastAPI app
-CMD ["python", "inference.py"]
+CMD ["uvicorn", "inference:app", "--host", "0.0.0.0", "--port", "8000"]
