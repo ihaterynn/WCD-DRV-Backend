@@ -14,6 +14,8 @@ COPY best_ehfrnet.pth ./best_ehfrnet.pth
 COPY model/ehfrnet.py ./model/ehfrnet.py
 COPY blocks/ ./blocks/
 COPY templates/ ./templates/
+COPY static/ ./static/
+
 
 # Expose the FastAPI app's default port
 EXPOSE 8000
