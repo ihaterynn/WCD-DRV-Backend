@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all necessary project files and directories
-COPY inference.py .
+COPY inference.py /inference
 COPY best_ehfrnet.pth .
 COPY model/ model/
 COPY blocks/ blocks/
