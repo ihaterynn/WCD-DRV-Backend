@@ -15,7 +15,6 @@ COPY embeddings.json /app/
 COPY model /app/model/
 COPY blocks /app/blocks/
 COPY templates /app/templates/
-COPY static /app/templates/
 
 # Expose the Flask app's default port
 EXPOSE 5000
