@@ -8,3 +8,4 @@ boto3
 mysql-connector-python
 sqlalchemy
 python-dotenv
+python-multipart
