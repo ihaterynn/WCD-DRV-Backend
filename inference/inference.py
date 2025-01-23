@@ -46,7 +46,7 @@ sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..")))
 from model.ehfrnet import EHFRNetMultiScale
 
 # Serve static files
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+## app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Jinja2 templates setup
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
