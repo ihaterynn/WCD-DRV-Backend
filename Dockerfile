@@ -11,7 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all necessary project files and directories
 COPY inference.py .
 COPY best_ehfrnet.pth .
-COPY embeddings.json .
 COPY model/ model/
 COPY blocks/ blocks/
 COPY templates/ templates/
