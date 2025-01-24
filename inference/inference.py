@@ -104,8 +104,9 @@ class WallpaperRecommender:
             current_db = cursor.fetchone()
             print(f"Currently connected to database: {current_db}\n")
 
-            # Query to fetch all embeddings
-            query = "SELECT filename, path, embedding, url FROM embeddings;"
+            # Query to fetch only base images, excluding augmented images
+            query = "SELECT filename, path, embedding, url FROM embeddings WHERE filename NOT LIKE '%_aug';"
+            print(f"Executing query: {query}") 
             cursor.execute(query)
             results = cursor.fetchall()
 
@@ -131,6 +132,9 @@ class WallpaperRecommender:
                 except json.JSONDecodeError as e:
                     print(f"Error decoding JSON for row {row['filename']}: {e}")
 
+            # Debugging: Check the number of results after filtering
+            print(f"Number of images returned after filtering: {len(parsed_results)}")
+
             return parsed_results
 
         except mysql.connector.Error as err:
@@ -139,17 +143,24 @@ class WallpaperRecommender:
             print(f"Unexpected error: {e}")
         return []
 
-    def recommend(self, user_img_path, top_k=6):
+    def recommend(self, user_img_path, top_k=9):
         user_emb = self._compute_embedding(user_img_path)
         embeddings = self._get_embeddings_from_db()
         similarities = []
 
+        # Debugging: Print the fetched embeddings for similarity comparison
+        print(f"Fetched {len(embeddings)} base images for similarity comparison.")
+
         for item in embeddings:
+            # Skip augmented images even if they have high similarity
+            if "_aug" in item['filename']:
+                continue
+
             stock_emb = np.array(item["embedding"])
             similarity = self._cosine_similarity(user_emb, stock_emb)
 
-            # Debugging: Print the URL to confirm it's fetched correctly
-            print(f"Processing: {item['filename']}, URL: {item['url']}")
+            # Debugging: Print the filename and similarity score to confirm it's correct
+            print(f"Processing: {item['filename']}, Similarity: {similarity:.4f}")
 
             similarities.append({
                 "path": item["path"],
@@ -159,7 +170,10 @@ class WallpaperRecommender:
             })
 
         similarities.sort(key=lambda x: x["similarity"], reverse=True)
+
+        # Return the top-k results
         return similarities[:top_k]
+
 
     @staticmethod
     def _cosine_similarity(a, b):
@@ -187,16 +201,16 @@ async def get_recommendations(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    recommendations = recommender.recommend(file_path, top_k=6)
+    recommendations = recommender.recommend(file_path, top_k=9)
 
-    base_url = "http://127.0.0.1:5000"
+    base_url = "http://127.0.0.1:8000"
     formatted_recommendations = []
     for item in recommendations:
         encoded_path = quote(item["path"], safe="")
         formatted_recommendations.append({
             "filename": item["filename"],
             "image_url": f"{base_url}/dataset_image?file={encoded_path}",
-            "url": item["url"],  # Ensure URL is passed to the frontend
+            "url": item["url"],  
             "similarity": item["similarity"]
         })
 
