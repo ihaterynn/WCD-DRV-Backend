@@ -12,35 +12,32 @@ load_dotenv()
 
 # Update the path for model imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from model.ehfrnet import EHFRNetMultiScale
+from model.resnet import ResNetSimilarityModel  # Import the new ResNet model
 
 # Initialize your model
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = EHFRNetMultiScale(num_classes=10).to(device)
+model = ResNetSimilarityModel(embedding_size=128).to(device)  # Initialize the new model
 model.eval()
 
-# Load the state_dict and handle incompatible keys
-state_dict = torch.load("best_ehfrnet.pth", map_location=device)
-if "classifier.weight" in state_dict:
-    del state_dict["classifier.weight"]
-if "classifier.bias" in state_dict:
-    del state_dict["classifier.bias"]
-model.load_state_dict(state_dict, strict=False)
+# Load the state_dict
+state_dict = torch.load("best_resnet.pth", map_location=device)  # Load the new model's weights
+model.load_state_dict(state_dict)
 
 # Define the transform
 transform = T.Compose([
     T.Resize((224, 224)),
-    T.ToTensor()
+    T.ToTensor(),
+    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Add normalization
 ])
 
-# MySQL connection function
+# Ensure the new database is being used in the `get_db_connection` function
 def get_db_connection():
     try:
         conn = mysql.connector.connect(
             host=os.getenv("DB_HOST", "localhost"),
             user=os.getenv("DB_USER", "root"),
             password=os.getenv("DB_PASSWORD", ""),
-            database=os.getenv("DB_NAME", "embeddings_db"),
+            database=os.getenv("DB_NAME", "embeddings_db_resnet_2"), 
             port=int(os.getenv("DB_PORT", 3306))
         )
         return conn
@@ -51,9 +48,9 @@ def get_db_connection():
 def compute_embedding(image_path):
     """Generate embedding for a single image."""
     image = Image.open(image_path).convert("RGB")
-    x = transform(image).unsqueeze(0).to(device)
+    x = transform(image).unsqueeze(0).to(device)  # Add batch dimension and move to device
     with torch.no_grad():
-        embedding = model.extract_features(x).cpu().numpy().flatten()
+        embedding = model(x).cpu().numpy().flatten()  # Use the new model's forward pass
     return embedding.tolist()
 
 def precompute_embeddings(image_folder):
@@ -108,5 +105,5 @@ if __name__ == "__main__":
     print(f"Connected to database: {os.getenv('DB_NAME')}")
 
     # Run the embedding precomputation
-    image_folder = "wallpaper_data/train"  # Path to your image folder
+    image_folder = r"C:\Users\User\OneDrive\Desktop\Wallpaper&Carpets Sdn Bhd\Datasets\Processed Wallpaper Dataset\train"
     precompute_embeddings(image_folder)

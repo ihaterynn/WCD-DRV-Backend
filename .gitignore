@@ -1,7 +1,9 @@
 /uploads/
 
-/wallpaper_data/
-
 embeddings.json
 
 .env
+
+cuda.py
+
+test.py

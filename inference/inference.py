@@ -36,14 +36,14 @@ ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 UPLOAD_FOLDER = os.path.join(ROOT_DIR, "uploads")
 TEMPLATES_DIR = os.path.join(ROOT_DIR, "templates")
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
-MODEL_PATH = os.path.join(ROOT_DIR, "best_ehfrnet.pth")
+MODEL_PATH = os.path.join(ROOT_DIR, "best_resnet.pth")  # Updated model path
 
 # Ensure required directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Update the path for model imports
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..")))
-from model.ehfrnet import EHFRNetMultiScale
+from model.resnet import ResNetSimilarityModel  # Import the new ResNet model
 
 # Serve static files
 ## app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -59,30 +59,27 @@ class WallpaperRecommender:
         self.device = device
 
         # Initialize model
-        self.model = EHFRNetMultiScale(num_classes=10)
+        self.model = ResNetSimilarityModel(embedding_size=128)  # Initialize the new model
         self.model.eval().to(self.device)
 
         # Load model weights
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
         state_dict = torch.load(model_path, map_location=device)
-        if "classifier.weight" in state_dict:
-            del state_dict["classifier.weight"]
-        if "classifier.bias" in state_dict:
-            del state_dict["classifier.bias"]
-        self.model.load_state_dict(state_dict, strict=False)
+        self.model.load_state_dict(state_dict)  # Load the new model's weights
 
         # Transform for input images
         self.transform = T.Compose([
             T.Resize((224, 224)),
-            T.ToTensor()
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Add normalization
         ])
 
     def _compute_embedding(self, img_path):
         img = Image.open(img_path).convert("RGB")
         x = self.transform(img).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            emb = self.model.extract_features(x)
+            emb = self.model(x)  # Use the new model's forward pass
         return emb.cpu().numpy().flatten()
 
     def _get_embeddings_from_db(self):
@@ -92,7 +89,7 @@ class WallpaperRecommender:
                 host=os.getenv("DB_HOST", "localhost"),
                 user=os.getenv("DB_USER", "root"),
                 password=os.getenv("DB_PASSWORD", ""),
-                database=os.getenv("DB_NAME", "embeddings_db"),
+                database=os.getenv("DB_NAME", "embeddings_db_resnet"),  # Updated database name
                 port=int(os.getenv("DB_PORT", 3306))
             )
             print("Connected to the database successfully.\n")
@@ -143,35 +140,34 @@ class WallpaperRecommender:
             print(f"Unexpected error: {e}")
         return []
 
-    def recommend(self, user_img_path, top_k=9):
+    def recommend(self, user_img_path, top_k=30):
         user_emb = self._compute_embedding(user_img_path)
         embeddings = self._get_embeddings_from_db()
         similarities = []
 
-        # Debugging: Print the fetched embeddings for similarity comparison
         print(f"Fetched {len(embeddings)} base images for similarity comparison.")
 
         for item in embeddings:
-            # Skip augmented images even if they have high similarity
             if "_aug" in item['filename']:
                 continue
 
             stock_emb = np.array(item["embedding"])
             similarity = self._cosine_similarity(user_emb, stock_emb)
 
-            # Debugging: Print the filename and similarity score to confirm it's correct
-            print(f"Processing: {item['filename']}, Similarity: {similarity:.4f}")
+            # Convert similarity to percentage
+            similarity_percentage = similarity * 100
+
+            print(f"Processing: {item['filename']}, Similarity: {similarity_percentage:.2f}%")
 
             similarities.append({
                 "path": item["path"],
                 "filename": item["filename"],
                 "url": item.get("url", "#"),
-                "similarity": similarity
+                "similarity": similarity_percentage  # Store the percentage value
             })
 
         similarities.sort(key=lambda x: x["similarity"], reverse=True)
 
-        # Return the top-k results
         return similarities[:top_k]
 
 
@@ -201,7 +197,7 @@ async def get_recommendations(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    recommendations = recommender.recommend(file_path, top_k=9)
+    recommendations = recommender.recommend(file_path, top_k=30)
 
     base_url = "http://127.0.0.1:8000"
     formatted_recommendations = []
