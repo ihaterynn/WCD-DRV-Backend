@@ -5,10 +5,8 @@ import pandas as pd
 from dotenv import load_dotenv
 import numpy as np
 
-# Load environment variables from the .env file
 load_dotenv()
 
-# Function to connect to the MySQL database
 def get_db_connection():
     try:
         conn = mysql.connector.connect(
@@ -25,17 +23,16 @@ def get_db_connection():
 
 # Function to update the inventory count in the database
 def update_inventory(csv_file_path):
-    # Read the CSV file
+
     df = pd.read_csv(csv_file_path)
 
-    # Ensure all SKUs are uppercase and handle NaN or empty SKUs
+    # Ensure all SKUs are uppercase and remove NaN or empty SKUs
     df['SKUs'] = df['SKUs'].str.upper()
-    df = df.dropna(subset=['SKUs'])  # Remove rows with NaN SKU values
+    df = df.dropna(subset=['SKUs'])  
 
     # Replace missing or NaN inventory values with 0
     df['Inventory (Roll)'] = df['Inventory (Roll)'].fillna(0)
 
-    # Connect to the database
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -81,7 +78,6 @@ def update_inventory(csv_file_path):
     cursor.close()
     conn.close()
 
-# Run the script
 if __name__ == "__main__":
     csv_file_path = os.path.join(os.getcwd(), "data", "Ai Covers - Covers.csv")
     update_inventory(csv_file_path)
