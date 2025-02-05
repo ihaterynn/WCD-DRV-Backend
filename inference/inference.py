@@ -30,20 +30,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Paths
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
-UPLOAD_FOLDER = os.path.join(ROOT_DIR, "uploads")
-TEMPLATES_DIR = os.path.join(ROOT_DIR, "templates")
-STATIC_DIR = os.path.join(ROOT_DIR, "static")
-MODEL_PATH = os.path.join(ROOT_DIR, "best_resnet.pth")  # Updated model path
+import os
 
-# Ensure required directories exist
+# Check if running inside Docker
+if os.path.exists("/app/best_resnet.pth"):
+    # Running inside Docker container
+    BASE_DIR = "/app"
+    ROOT_DIR = "/app"
+    UPLOAD_FOLDER = "/app/uploads"
+    TEMPLATES_DIR = "/app/templates"
+    STATIC_DIR = "/app/static"
+    MODEL_PATH = "/app/best_resnet.pth"
+else:
+    # Running locally
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+    ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
+    UPLOAD_FOLDER = os.path.join(ROOT_DIR, "uploads")
+    TEMPLATES_DIR = os.path.join(ROOT_DIR, "templates")
+    STATIC_DIR = os.path.join(ROOT_DIR, "static")
+    MODEL_PATH = os.path.join(ROOT_DIR, "best_resnet.pth")
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Update the path for model imports
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..")))
-from model.resnet import ResNetSimilarityModel  # Import the new ResNet model
+from model.resnet import ResNetSimilarityModel  
 
 # Jinja2 templates setup
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -56,27 +67,27 @@ class WallpaperRecommender:
         self.device = device
 
         # Initialize model
-        self.model = ResNetSimilarityModel(embedding_size=128)  # Initialize the new model
+        self.model = ResNetSimilarityModel(embedding_size=128)  
         self.model.eval().to(self.device)
 
         # Load model weights
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
         state_dict = torch.load(model_path, map_location=device)
-        self.model.load_state_dict(state_dict)  # Load the new model's weights
+        self.model.load_state_dict(state_dict)  
 
         # Transform for input images
         self.transform = T.Compose([
             T.Resize((224, 224)),
             T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Add normalization
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # normalization
         ])
 
     def _compute_embedding(self, img_path):
         img = Image.open(img_path).convert("RGB")
         x = self.transform(img).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            emb = self.model(x)  # Use the new model's forward pass
+            emb = self.model(x)  
         return emb.cpu().numpy().flatten()
 
     def _get_embeddings_from_db(self, filename=None):
@@ -86,7 +97,7 @@ class WallpaperRecommender:
                 host=os.getenv("DB_HOST", "localhost"),
                 user=os.getenv("DB_USER", "root"),
                 password=os.getenv("DB_PASSWORD", ""),
-                database=os.getenv("DB_NAME", "embeddings_db_resnet"),  # Ensure you're using the correct database
+                database=os.getenv("DB_NAME", "embeddings_db_resnet"),  
                 port=int(os.getenv("DB_PORT", 3306))
             )
 
@@ -232,7 +243,7 @@ async def get_recommendations(file: UploadFile = File(...)):
     base_url = "http://127.0.0.1:8000"
     formatted_recommendations = []
     for item in recommendations:
-        encoded_path = quote(item["path"], safe="")  # Encode path
+        encoded_path = quote(item["path"], safe="")  
         formatted_recommendations.append({
             "filename": item["filename"],
             "image_url": f"{base_url}/dataset_image?file={encoded_path}",
