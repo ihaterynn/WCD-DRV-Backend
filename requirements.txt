@@ -2,7 +2,7 @@ fastapi
 uvicorn
 torch
 torchvision
-torchaudio==2.0.2+cu118
+torchaudio==2.0.2
 Pillow
 numpy
 boto3
