@@ -1,4 +1,3 @@
-
 import os
 import sys
 import torch
@@ -46,9 +45,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..")))
 from model.resnet import ResNetSimilarityModel  # Import the new ResNet model
 
-# Serve static files
-## app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 # Jinja2 templates setup
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
@@ -93,24 +89,15 @@ class WallpaperRecommender:
                 database=os.getenv("DB_NAME", "embeddings_db_resnet"),  # Ensure you're using the correct database
                 port=int(os.getenv("DB_PORT", 3306))
             )
-            print("Connected to the database successfully.\n")
 
             cursor = conn.cursor(dictionary=True)
 
-            # Check the current database
-            cursor.execute("SELECT DATABASE();")
-            current_db = cursor.fetchone()
-            print(f"Currently connected to database: {current_db}\n")
-
-            # Query to fetch base images, excluding augmented images, and include inventory_count
             query = """
                 SELECT filename, path, embedding, url, inventory_count
                 FROM embeddings 
                 WHERE filename NOT LIKE '%_aug'
             """
-            # If filename is provided, filter results by filename
             if filename:
-                # Using parameterized query to prevent SQL injection
                 query += " AND filename = %s"
                 cursor.execute(query, (filename,))
             else:
@@ -118,16 +105,9 @@ class WallpaperRecommender:
 
             results = cursor.fetchall()
 
-            # Print the results row by row for debugging
-            print("Fetched rows from database:")
-            for row in results:
-                print(f"Filename: {row['filename']}, URL: {row['url']}, Inventory: {row['inventory_count']}")
-
-            # Close the connection
             cursor.close()
             conn.close()
 
-            # Parse and return embeddings along with inventory_count
             parsed_results = []
             for row in results:
                 try:
@@ -136,13 +116,10 @@ class WallpaperRecommender:
                         "path": row["path"],
                         "embedding": json.loads(row["embedding"]),
                         "url": row["url"],
-                        "inventory_count": row["inventory_count"]  # Include inventory_count in the result
+                        "inventory_count": row["inventory_count"]
                     })
                 except json.JSONDecodeError as e:
                     print(f"Error decoding JSON for row {row['filename']}: {e}")
-
-            # Debugging: Check the number of results after filtering
-            print(f"Number of images returned after filtering: {len(parsed_results)}")
 
             return parsed_results
 
@@ -157,43 +134,13 @@ class WallpaperRecommender:
         embeddings = self._get_embeddings_from_db()
         similarities = []
 
-        print(f"Fetched {len(embeddings)} base images for similarity comparison.")
-
         for item in embeddings:
             if "_aug" in item['filename']:
                 continue
 
             stock_emb = np.array(item["embedding"])
             similarity = self._cosine_similarity(user_emb, stock_emb)
-
-            # Convert similarity to percentage
             similarity_percentage = similarity * 100
-
-            print(f"Processing: {item['filename']}, Similarity: {similarity_percentage:.2f}%")
-
-            similarities.append({
-                "path": item["path"],
-                "filename": item["filename"],
-                "url": item.get("url", "#"),
-                "inventory_count": item["inventory_count"],  # Include inventory count in the response
-                "similarity": similarity_percentage  # Store the percentage value
-            })
-
-        similarities.sort(key=lambda x: x["similarity"], reverse=True)
-
-        return similarities[:top_k]
-
-    def get_recommendations_by_filename(self, filename, top_k=30):
-        print(f"Fetching recommendations for filename: {filename}")  # Debugging log
-        # Fetch the exact matching filename and then compute similarity
-        embeddings = self._get_embeddings_from_db(filename=filename)
-        if not embeddings:
-            return []
-
-        similarities = []
-        for item in embeddings:
-            stock_emb = np.array(item["embedding"])
-            similarity_percentage = 100  # Exact match, so similarity is 100%
 
             similarities.append({
                 "path": item["path"],
@@ -204,10 +151,10 @@ class WallpaperRecommender:
             })
 
         similarities.sort(key=lambda x: x["similarity"], reverse=True)
+
         return similarities[:top_k]
 
-    @staticmethod
-    def _cosine_similarity(a, b):
+    def _cosine_similarity(self, a, b):
         dot = np.dot(a, b)
         norm_a = np.linalg.norm(a)
         norm_b = np.linalg.norm(b)
@@ -231,31 +178,33 @@ async def get_recommendations_by_filename(request: Request):
     if not filename:
         raise HTTPException(status_code=400, detail="Filename not provided.")
     
-    # Fetch the image path for the given filename from the database
-    embeddings = recommender._get_embeddings_from_db(filename=filename)
-    
-    if not embeddings:
-        raise HTTPException(status_code=404, detail="Filename not found or unavailable.")
-    
-    # Get the image path for the found filename (use the first match)
-    image_path = embeddings[0]["path"]
-    
-    # Now compute the embedding for this image
-    filename_embedding = recommender._compute_embedding(image_path)
+    all_embeddings = recommender._get_embeddings_from_db()
+
+    if not all_embeddings:
+        raise HTTPException(status_code=404, detail="No images found in the database.")
+
+    input_image_path = None
+    for item in all_embeddings:
+        if item['filename'] == filename:
+            input_image_path = item['path']
+            break
+
+    if not input_image_path:
+        raise HTTPException(status_code=404, detail="Filename not found in the database.")
+
+    input_embedding = recommender._compute_embedding(input_image_path)
+
     similarities = []
+    for item in all_embeddings:
+        if "_aug" in item['filename']:
+            continue
 
-    # Now calculate the similarity of this filename's embedding to others in the database
-    for item in embeddings:
         stock_emb = np.array(item["embedding"])
-        similarity_percentage = recommender._cosine_similarity(filename_embedding, stock_emb) * 100
-
-        # Ensure the image URL is correctly included in the recommendations
-        base_url = "http://127.0.0.1:8000"  # Make sure this is the correct base URL for your setup
-        encoded_path = quote(item["path"], safe="")  # Encode path for URL
+        similarity_percentage = recommender._cosine_similarity(input_embedding, stock_emb) * 100
         similarities.append({
             "path": item["path"],
             "filename": item["filename"],
-            "image_url": f"{base_url}/dataset_image?file={encoded_path}",  # Image URL from database
+            "image_url": f"http://127.0.0.1:8000/dataset_image?file={quote(item['path'], safe='')}",
             "url": item.get("url", "#"),
             "inventory_count": item["inventory_count"],
             "similarity": similarity_percentage
@@ -263,8 +212,11 @@ async def get_recommendations_by_filename(request: Request):
 
     similarities.sort(key=lambda x: x["similarity"], reverse=True)
 
-    # Return the recommendations along with the image URL to display in the frontend
-    return {"recommendations": similarities, "image_url": f"{base_url}/dataset_image?file={encoded_path}"}
+    return {
+        "recommendations": similarities[:30],
+        "image_url": f"http://127.0.0.1:8000/dataset_image?file={quote(input_image_path, safe='')}"
+    }
+
 
 @app.post("/recommendations/")
 async def get_recommendations(file: UploadFile = File(...)):
