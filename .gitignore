@@ -7,3 +7,8 @@ embeddings.json
 cuda.py
 
 test.py
+
+__pycache__/
+*.pyc
+*.pyo
+
