@@ -79,5 +79,5 @@ def update_inventory(csv_file_path):
     conn.close()
 
 if __name__ == "__main__":
-    csv_file_path = os.path.join(os.getcwd(), "data", "Ai Covers - Covers.csv")
+    csv_file_path = os.path.join(os.getcwd(), "data", "AI_Covers.csv")
     update_inventory(csv_file_path)
