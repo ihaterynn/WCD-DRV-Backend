@@ -77,10 +77,10 @@ class WallpaperRecommender:
         self.model.load_state_dict(state_dict)  
 
         # Transform for input images
-        self.transform = T.Compose([
+        self.transform = T.Compose([ 
             T.Resize((224, 224)),
             T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # normalization
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  
         ])
 
     def _compute_embedding(self, img_path):
@@ -92,12 +92,15 @@ class WallpaperRecommender:
 
     def _get_embeddings_from_db(self, filename=None):
         try:
+            # Determine DB_HOST based on whether running in Docker
+            DB_HOST = "host.docker.internal" if os.getenv('DOCKER') == 'true' else "localhost"
+
             # Connect to the MySQL database
             conn = mysql.connector.connect(
-                host=os.getenv("DB_HOST", "localhost"),
+                host=DB_HOST,
                 user=os.getenv("DB_USER", "root"),
                 password=os.getenv("DB_PASSWORD", ""),
-                database=os.getenv("DB_NAME", "embeddings_db_resnet"),  
+                database=os.getenv("DB_NAME", "embeddings_db_resnet_2"),
                 port=int(os.getenv("DB_PORT", 3306))
             )
 
@@ -122,9 +125,21 @@ class WallpaperRecommender:
             parsed_results = []
             for row in results:
                 try:
+                    file_path = row["path"]
+
+                    # If running inside Docker, replace Windows paths with Docker paths
+                    if os.getenv('DOCKER') == 'true':
+                        local_path_prefix = "C:/Users/User/OneDrive/Desktop/Wallpaper&Carpets Sdn Bhd/Datasets/Processed Wallpaper Dataset"
+                        docker_mount_prefix = "/app/dataset"
+
+                        if file_path.startswith(local_path_prefix):
+                            file_path = docker_mount_prefix + file_path[len(local_path_prefix):]
+
+                    file_path = file_path.replace("\\", "/").strip()
+
                     parsed_results.append({
-                        "filename": row["filename"],
-                        "path": row["path"],
+                        "filename": row["filename"].strip(),
+                        "path": file_path,
                         "embedding": json.loads(row["embedding"]),
                         "url": row["url"],
                         "inventory_count": row["inventory_count"]
@@ -139,6 +154,31 @@ class WallpaperRecommender:
         except Exception as e:
             print(f"Unexpected error: {e}")
         return []
+
+    def recommend(self, user_img_path, top_k=30):
+        user_emb = self._compute_embedding(user_img_path)
+        embeddings = self._get_embeddings_from_db()
+        similarities = []
+
+        for item in embeddings:
+            if "_aug" in item['filename']:
+                continue
+
+            stock_emb = np.array(item["embedding"])
+            similarity = self._cosine_similarity(user_emb, stock_emb)
+            similarity_percentage = similarity * 100
+
+            similarities.append({
+                "path": item["path"],
+                "filename": item["filename"],
+                "url": item.get("url", "#"),
+                "inventory_count": item["inventory_count"],
+                "similarity": similarity_percentage
+            })
+
+        similarities.sort(key=lambda x: x["similarity"], reverse=True)
+
+        return similarities[:top_k]
 
     def recommend(self, user_img_path, top_k=30):
         user_emb = self._compute_embedding(user_img_path)
@@ -189,11 +229,13 @@ async def get_recommendations_by_filename(request: Request):
     if not filename:
         raise HTTPException(status_code=400, detail="Filename not provided.")
     
-    all_embeddings = recommender._get_embeddings_from_db()
+    # Retrieve all embeddings from the database for comparison
+    all_embeddings = recommender._get_embeddings_from_db()  
 
     if not all_embeddings:
         raise HTTPException(status_code=404, detail="No images found in the database.")
 
+    # Find the input image's embedding
     input_image_path = None
     for item in all_embeddings:
         if item['filename'] == filename:
@@ -203,8 +245,10 @@ async def get_recommendations_by_filename(request: Request):
     if not input_image_path:
         raise HTTPException(status_code=404, detail="Filename not found in the database.")
 
+    # Compute the input image's embedding
     input_embedding = recommender._compute_embedding(input_image_path)
 
+    # Calculate similarity for each image in the database
     similarities = []
     for item in all_embeddings:
         if "_aug" in item['filename']:
@@ -221,8 +265,10 @@ async def get_recommendations_by_filename(request: Request):
             "similarity": similarity_percentage
         })
 
+    # Sort the similarities by score in descending order (most similar first)
     similarities.sort(key=lambda x: x["similarity"], reverse=True)
 
+    # Return top 30 recommendations
     return {
         "recommendations": similarities[:30],
         "image_url": f"http://127.0.0.1:8000/dataset_image?file={quote(input_image_path, safe='')}"
@@ -258,12 +304,22 @@ async def get_recommendations(file: UploadFile = File(...)):
 @app.get("/dataset_image")
 async def dataset_image(file: str):
     image_path = unquote(file)
+    
+    # Ensure correct path mapping for Docker
+    if os.getenv('DOCKER') == 'true':
+        docker_mount_prefix = "/app/dataset"  
+        local_path_prefix = "C:/Users/User/OneDrive/Desktop/Wallpaper&Carpets Sdn Bhd/Datasets/Processed Wallpaper Dataset"
+
+        if image_path.startswith(local_path_prefix):
+            image_path = docker_mount_prefix + image_path[len(local_path_prefix):]
+    
     image_path = os.path.normpath(os.path.abspath(image_path))
 
     if not os.path.exists(image_path):
         raise HTTPException(status_code=404, detail="File not found.")
 
     return FileResponse(image_path)
+
 
 
 if __name__ == "__main__":
