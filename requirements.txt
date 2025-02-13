@@ -10,3 +10,4 @@ mysql-connector-python
 sqlalchemy
 python-dotenv
 python-multipart
+pytest
