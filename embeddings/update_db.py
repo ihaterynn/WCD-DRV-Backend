@@ -57,11 +57,34 @@ def get_product_data():
 
     rows = worksheet.get_all_records(head=1)
 
-    # Filter out SKUs starting with "TOOLS"
-    filtered_rows = [row for row in rows if not row.get("SKU", "").startswith("TOOLS")]
+    # Trim whitespace before filtering
+    filtered_rows = []
+    ignored_count = 0
 
+    for row in rows:
+        product_type = row.get("Product_Type", "").strip()  # Trim spaces
+        collection = row.get("Collection", "").strip()  # Trim spaces
+        sku = row.get("SKU", "").strip()  # Trim spaces
+
+        # Skip if SKU starts with "TOOLS"
+        if sku.startswith("TOOLS"):
+            ignored_count += 1
+            continue
+
+        # Skip if Product_Type is EXACTLY "Adhesives" (case-sensitive) OR Collection is EXACTLY "ADHESIVES"
+        if product_type == "Adhesives" or collection == "ADHESIVES":
+            ignored_count += 1
+            continue
+
+        filtered_rows.append(row)  # Add valid rows to the list
+
+    print(f"🚫 Ignored {ignored_count} rows with SKUs starting with 'TOOLS' or Product_Type 'Adhesives' in Collection 'ADHESIVES'.")
+
+
+    # Count ignored rows
     ignored_count = len(rows) - len(filtered_rows)
-    print(f"🚫 Ignored {ignored_count} rows with SKUs starting with 'TOOLS'.")
+    print(f"🚫 Ignored {ignored_count} rows with SKUs starting with 'TOOLS' or Product_Type 'Adhesives' in Collection 'ADHESIVES'.")
+
 
     return headers, filtered_rows  
 
