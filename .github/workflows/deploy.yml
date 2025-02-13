@@ -1,0 +1,66 @@
+name: Build and Test FastAPI Backend
+
+on:
+  push:
+    branches:
+      - main  # Runs on push to main branch
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Tests
+        run: |
+          pytest  # Run tests
+
+      - name: Build Docker Image (for Validation)
+        run: |
+          docker build -t fastapi-backend:latest .
+
+# jobs:
+#  deploy:
+#    runs-on: ubuntu-latest
+#
+ #   steps:
+  #    - name: Checkout Repository
+   #     uses: actions/checkout@v3
+
+ #     - name: Set up Python
+  #      uses: actions/setup-python@v4
+   #     with:
+    #      python-version: "3.9"
+
+     # - name: Install Dependencies
+      #  run: |
+       #   python -m pip install --upgrade pip
+        #  pip install -r requirements.txt
+
+  #    - name: Run Tests 
+   #     run: |
+    #      pytest  # Run tests 
+
+     # - name: Deploy to Hostinger VPS via SSH
+      #  uses: appleboy/ssh-action@master
+       # with:
+        #  host: ${{ secrets.HOSTINGER_IP }}
+        # username: ${{ secrets.HOSTINGER_USER }}
+       #   key: ${{ secrets.HOSTINGER_SSH_KEY }}
+       #   script: |
+        #    cd /home/yourusername/yourproject
+        #    git pull origin main
+        #    docker-compose down
+        #    docker-compose up -d --build
