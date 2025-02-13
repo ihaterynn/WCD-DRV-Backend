@@ -3,19 +3,20 @@ import sys
 import torch
 import mysql.connector
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import numpy as np
 from urllib.parse import quote, unquote
 from torchvision import transforms as T
 from dotenv import load_dotenv
 import uvicorn
 import json
+import requests
+from io import BytesIO
 
-# Load environment variables from the .env file
 load_dotenv()
 
 # Initialize FastAPI app
@@ -29,8 +30,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-import os
 
 # Check if running inside Docker
 if os.path.exists("/app/best_resnet.pth"):
@@ -52,13 +51,10 @@ else:
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Update the path for model imports
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..")))
 from model.resnet import ResNetSimilarityModel  
 
-# Jinja2 templates setup
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
-
 
 class WallpaperRecommender:
     def __init__(self, model_path=MODEL_PATH, device=None):
@@ -66,36 +62,47 @@ class WallpaperRecommender:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
 
-        # Initialize model
-        self.model = ResNetSimilarityModel(embedding_size=128)  
+        self.model = ResNetSimilarityModel(embedding_size=128)
         self.model.eval().to(self.device)
 
-        # Load model weights
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
         state_dict = torch.load(model_path, map_location=device)
-        self.model.load_state_dict(state_dict)  
+        self.model.load_state_dict(state_dict)
 
         # Transform for input images
-        self.transform = T.Compose([ 
+        self.transform = T.Compose([
             T.Resize((224, 224)),
             T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
     def _compute_embedding(self, img_path):
-        img = Image.open(img_path).convert("RGB")
+        try:
+            if img_path.startswith("http"):
+                try:
+                    response = requests.get(img_path)
+                    response.raise_for_status()  # Raises an error for bad status codes
+                    img = Image.open(BytesIO(response.content)).convert("RGB")
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Error downloading image: {e}")
+            else:
+                img = Image.open(img_path).convert("RGB")
+        except UnidentifiedImageError:
+            raise HTTPException(status_code=400, detail="Invalid image file provided.")
         x = self.transform(img).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            emb = self.model(x)  
+            emb = self.model(x)
         return emb.cpu().numpy().flatten()
 
-    def _get_embeddings_from_db(self, filename=None):
+    def _get_embeddings_from_db(self, sku=None):
+        """
+        Fetches columns: SKU, Product_Type, UOM, Inventory_Internal,
+        Image_1 ... Image_8, and Embeddings.
+        """
         try:
-            # Determine DB_HOST based on whether running in Docker
             DB_HOST = "host.docker.internal" if os.getenv('DOCKER') == 'true' else "localhost"
 
-            # Connect to the MySQL database
             conn = mysql.connector.connect(
                 host=DB_HOST,
                 user=os.getenv("DB_USER", "root"),
@@ -107,46 +114,57 @@ class WallpaperRecommender:
             cursor = conn.cursor(dictionary=True)
 
             query = """
-                SELECT filename, path, embedding, url, inventory_count
+                SELECT SKU, `Product_Type`, UOM, Inventory_Internal, 
+                       Image_1, Image_2, Image_3, Image_4, Image_5, Image_6, Image_7, Image_8, Embeddings
                 FROM embeddings 
-                WHERE filename NOT LIKE '%_aug'
+                WHERE SKU NOT LIKE '%_aug'
             """
-            if filename:
-                query += " AND filename = %s"
-                cursor.execute(query, (filename,))
+            if sku:
+                query += " AND SKU = %s"
+                cursor.execute(query, (sku,))
             else:
                 cursor.execute(query)
 
             results = cursor.fetchall()
-
             cursor.close()
             conn.close()
 
             parsed_results = []
             for row in results:
                 try:
-                    file_path = row["path"]
-
-                    # If running inside Docker, replace Windows paths with Docker paths
+                    file_path = row["Image_1"]
                     if os.getenv('DOCKER') == 'true':
                         local_path_prefix = "C:/Users/User/OneDrive/Desktop/Wallpaper&Carpets Sdn Bhd/Datasets/Processed Wallpaper Dataset"
                         docker_mount_prefix = "/app/dataset"
-
                         if file_path.startswith(local_path_prefix):
                             file_path = docker_mount_prefix + file_path[len(local_path_prefix):]
 
                     file_path = file_path.replace("\\", "/").strip()
+                    embedding_data = json.loads(row["Embeddings"])
+                    if not embedding_data or (isinstance(embedding_data, dict) and not embedding_data):
+                        continue
+                    if isinstance(embedding_data, dict) and "embedding" in embedding_data:
+                        embedding_data = embedding_data["embedding"]
+                    if not isinstance(embedding_data, list) or len(embedding_data) == 0:
+                        continue
 
                     parsed_results.append({
-                        "filename": row["filename"].strip(),
-                        "path": file_path,
-                        "embedding": json.loads(row["embedding"]),
-                        "url": row["url"],
-                        "inventory_count": row["inventory_count"]
+                        "SKU": row["SKU"].strip(),
+                        "Product_Type": row["Product_Type"].strip(),
+                        "UOM": row["UOM"].strip(),
+                        "Inventory_Internal": row["Inventory_Internal"],
+                        "Image_1": file_path,
+                        "Image_2": row["Image_2"],
+                        "Image_3": row["Image_3"],
+                        "Image_4": row["Image_4"],
+                        "Image_5": row["Image_5"],
+                        "Image_6": row["Image_6"],
+                        "Image_7": row["Image_7"],
+                        "Image_8": row["Image_8"],
+                        "Embeddings": embedding_data
                     })
                 except json.JSONDecodeError as e:
-                    print(f"Error decoding JSON for row {row['filename']}: {e}")
-
+                    print(f"Error decoding JSON for SKU {row['SKU']}: {e}")
             return parsed_results
 
         except mysql.connector.Error as err:
@@ -155,61 +173,32 @@ class WallpaperRecommender:
             print(f"Unexpected error: {e}")
         return []
 
-    def recommend(self, user_img_path, top_k=30):
-        user_emb = self._compute_embedding(user_img_path)
-        embeddings = self._get_embeddings_from_db()
-        similarities = []
-
-        for item in embeddings:
-            if "_aug" in item['filename']:
-                continue
-
-            stock_emb = np.array(item["embedding"])
-            similarity = self._cosine_similarity(user_emb, stock_emb)
-            similarity_percentage = similarity * 100
-
-            similarities.append({
-                "path": item["path"],
-                "filename": item["filename"],
-                "url": item.get("url", "#"),
-                "inventory_count": item["inventory_count"],
-                "similarity": similarity_percentage
-            })
-
-        similarities.sort(key=lambda x: x["similarity"], reverse=True)
-
-        return similarities[:top_k]
-
-    def recommend(self, user_img_path, top_k=30):
-        user_emb = self._compute_embedding(user_img_path)
-        embeddings = self._get_embeddings_from_db()
-        similarities = []
-
-        for item in embeddings:
-            if "_aug" in item['filename']:
-                continue
-
-            stock_emb = np.array(item["embedding"])
-            similarity = self._cosine_similarity(user_emb, stock_emb)
-            similarity_percentage = similarity * 100
-
-            similarities.append({
-                "path": item["path"],
-                "filename": item["filename"],
-                "url": item.get("url", "#"),
-                "inventory_count": item["inventory_count"],
-                "similarity": similarity_percentage
-            })
-
-        similarities.sort(key=lambda x: x["similarity"], reverse=True)
-
-        return similarities[:top_k]
-
     def _cosine_similarity(self, a, b):
         dot = np.dot(a, b)
         norm_a = np.linalg.norm(a)
         norm_b = np.linalg.norm(b)
         return dot / (norm_a * norm_b + 1e-8)
+
+    def recommend(self, user_img_path, top_k=30):
+        user_emb = self._compute_embedding(user_img_path)
+        embeddings = self._get_embeddings_from_db()
+        similarities = []
+        for item in embeddings:
+            if "_aug" in item['SKU']:
+                continue
+            stock_emb = np.array(item["Embeddings"])
+            similarity = self._cosine_similarity(user_emb, stock_emb)
+            similarity_percentage = similarity * 100
+            similarities.append({
+                "filename": item["SKU"],                    
+                "Product_Type": item["Product_Type"],         
+                "UOM": item["UOM"],                           
+                "inventory_count": item["Inventory_Internal"], 
+                "image_url": item["Image_1"] if item["Image_1"].startswith("http") else None,
+                "similarity": similarity_percentage           
+            })
+        similarities.sort(key=lambda x: x["similarity"], reverse=True)
+        return similarities[:top_k]
 
 
 # Initialize recommender
@@ -222,56 +211,40 @@ async def serve_index(request: Request):
 
 
 @app.post("/recommendations/filename")
-async def get_recommendations_by_filename(request: Request):
+async def get_recommendations_by_sku(request: Request):
+    """
+    Accepts a JSON body with key "filename" (the SKU)
+    and returns recommendations based on the primary image.
+    """
     body = await request.json()
-    filename = body.get("filename")
-
-    if not filename:
-        raise HTTPException(status_code=400, detail="Filename not provided.")
-    
-    # Retrieve all embeddings from the database for comparison
-    all_embeddings = recommender._get_embeddings_from_db()  
-
+    sku = body.get("filename")
+    if not sku:
+        raise HTTPException(status_code=400, detail="SKU not provided.")
+    all_embeddings = recommender._get_embeddings_from_db(sku)
     if not all_embeddings:
-        raise HTTPException(status_code=404, detail="No images found in the database.")
-
-    # Find the input image's embedding
-    input_image_path = None
-    for item in all_embeddings:
-        if item['filename'] == filename:
-            input_image_path = item['path']
-            break
-
-    if not input_image_path:
-        raise HTTPException(status_code=404, detail="Filename not found in the database.")
-
-    # Compute the input image's embedding
+        raise HTTPException(status_code=404, detail="No images found for the provided SKU.")
+    input_image_path = all_embeddings[0]["Image_1"]
     input_embedding = recommender._compute_embedding(input_image_path)
-
-    # Calculate similarity for each image in the database
     similarities = []
+    all_embeddings = recommender._get_embeddings_from_db()  
     for item in all_embeddings:
-        if "_aug" in item['filename']:
+        if "_aug" in item['SKU']:
             continue
-
-        stock_emb = np.array(item["embedding"])
+        stock_emb = np.array(item["Embeddings"])
         similarity_percentage = recommender._cosine_similarity(input_embedding, stock_emb) * 100
         similarities.append({
-            "path": item["path"],
-            "filename": item["filename"],
-            "image_url": f"http://127.0.0.1:8000/dataset_image?file={quote(item['path'], safe='')}",
-            "url": item.get("url", "#"),
-            "inventory_count": item["inventory_count"],
+            "filename": item["SKU"],
+            "Product_Type": item["Product_Type"],
+            "UOM": item["UOM"],
+            "inventory_count": item["Inventory_Internal"],
+            "image_url": item["Image_1"] if item["Image_1"].startswith("http") else None,
             "similarity": similarity_percentage
         })
-
-    # Sort the similarities by score in descending order (most similar first)
     similarities.sort(key=lambda x: x["similarity"], reverse=True)
-
-    # Return top 30 recommendations
+    main_image_url = input_image_path if input_image_path.startswith("http") else f"http://127.0.0.1:8000/dataset_image?file={quote(input_image_path, safe='')}"
     return {
         "recommendations": similarities[:30],
-        "image_url": f"http://127.0.0.1:8000/dataset_image?file={quote(input_image_path, safe='')}"
+        "image_url": main_image_url
     }
 
 
@@ -279,47 +252,40 @@ async def get_recommendations_by_filename(request: Request):
 async def get_recommendations(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No selected file")
-
     file_path = os.path.join(UPLOAD_FOLDER, file.filename)
     with open(file_path, "wb") as f:
         f.write(await file.read())
-
     recommendations = recommender.recommend(file_path, top_k=30)
-
     base_url = "http://127.0.0.1:8000"
     formatted_recommendations = []
     for item in recommendations:
-        encoded_path = quote(item["path"], safe="")  
+        image_url = item["image_url"] if item["image_url"] is not None else f"{base_url}/dataset_image?file={quote(item['filename'], safe='')}"
         formatted_recommendations.append({
             "filename": item["filename"],
-            "image_url": f"{base_url}/dataset_image?file={encoded_path}",
-            "url": item["url"],
+            "Product_Type": item["Product_Type"],
+            "UOM": item["UOM"],
             "inventory_count": item["inventory_count"],
+            "url": "#",
+            "image_url": image_url,
             "similarity": item["similarity"]
         })
-
     return {"recommendations": formatted_recommendations}
 
 
 @app.get("/dataset_image")
 async def dataset_image(file: str):
     image_path = unquote(file)
-    
-    # Ensure correct path mapping for Docker
+    if image_path.startswith("http"):
+        return RedirectResponse(url=image_path)
     if os.getenv('DOCKER') == 'true':
-        docker_mount_prefix = "/app/dataset"  
+        docker_mount_prefix = "/app/dataset"
         local_path_prefix = "C:/Users/User/OneDrive/Desktop/Wallpaper&Carpets Sdn Bhd/Datasets/Processed Wallpaper Dataset"
-
         if image_path.startswith(local_path_prefix):
             image_path = docker_mount_prefix + image_path[len(local_path_prefix):]
-    
     image_path = os.path.normpath(os.path.abspath(image_path))
-
     if not os.path.exists(image_path):
         raise HTTPException(status_code=404, detail="File not found.")
-
     return FileResponse(image_path)
-
 
 
 if __name__ == "__main__":
