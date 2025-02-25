@@ -1,4 +1,4 @@
-name: Build and Test FastAPI Backend
+name: Build, Test FastAPI Backend with MySQL
 
 on:
   push:
@@ -8,6 +8,18 @@ on:
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:latest
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.DB_NAME }}
+          MYSQL_USER: ${{ secrets.DB_USER }}
+          MYSQL_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1 -u ${{ secrets.DB_USER }} --password=${{ secrets.DB_PASSWORD }}" --health-interval=10s --health-timeout=5s --health-retries=3
 
     steps:
       - name: Checkout Repository
@@ -23,13 +35,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Tests
+      - name: Wait for MySQL to be ready
         run: |
-          pytest  # Run tests
+          for i in {1..30}; do
+            nc -z 127.0.0.1 3306 && echo "MySQL is up" && exit 0
+            echo "Waiting for MySQL..."
+            sleep 2
+          done
+          echo "MySQL failed to start" && exit 1
+
+      - name: Set Environment Variables (Using GitHub Secrets)
+        run: |
+          echo "DB_HOST=${{ secrets.DB_HOST }}" >> $GITHUB_ENV
+          echo "DB_PORT=${{ secrets.DB_PORT }}" >> $GITHUB_ENV
+          echo "DB_USER=${{ secrets.DB_USER }}" >> $GITHUB_ENV
+          echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> $GITHUB_ENV
+          echo "DB_NAME=${{ secrets.DB_NAME }}" >> $GITHUB_ENV
+
+      - name: Run Tests
+        run: pytest  # Run tests
 
       - name: Build Docker Image (for Validation)
-        run: |
-          docker build -t fastapi-backend:latest .
+        run: docker build -t fastapi-backend:latest .
+
 
 # jobs:
 #  deploy:

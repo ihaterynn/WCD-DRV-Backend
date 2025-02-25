@@ -33,12 +33,12 @@ def get_db_connection():
 device = "cuda" if torch.cuda.is_available() else "cpu"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from model.resnet import ResNetSimilarityModel 
+from model.DRV import HybridSimilarityModel 
 
 # Load pre-trained model
-model = ResNetSimilarityModel(embedding_size=128).to(device)
+model = HybridSimilarityModel(embedding_size=128).to(device)
 model.eval()
-state_dict = torch.load("best_resnet.pth", map_location=device)
+state_dict = torch.load("best_DRS.pth", map_location=device)
 model.load_state_dict(state_dict)
 
 # Define transformation for image preprocessing
@@ -108,12 +108,16 @@ def precompute_embeddings(image_folder):
     cursor.close()
     conn.close()
 
-if __name__ == "__main__":
+def main():
+    # Check connection to database
     conn = get_db_connection()
     if conn.is_connected():
         print(f"✅ Connected to database: {DB_NAME}")
     conn.close()
 
-    # Run the embedding precomputation
-    image_folder = r"C:\Users\User\OneDrive\Desktop\Wallpaper&Carpets Sdn Bhd\Datasets\Processed Wallpaper Dataset\train"
+    # Use the IMAGE_FOLDER environment variable if set, otherwise use a default path.
+    image_folder = os.getenv("IMAGE_FOLDER", r"C:\Users\User\OneDrive\Desktop\WallpaperAndCarpets_Sdn Bhd\Datasets\Processed Wallpaper Dataset\train")
     precompute_embeddings(image_folder)
+
+if __name__ == "__main__":
+    main()
