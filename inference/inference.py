@@ -23,10 +23,8 @@ import torch
 
 load_dotenv()
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Enable CORS for all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,8 +33,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Check if running inside Docker
+# Check if running inside Docker or local environment
 if os.path.exists("/app/best_DRV.pth"):
+    # Running inside Docker container
     BASE_DIR = "/app"
     ROOT_DIR = "/app"
     UPLOAD_FOLDER = "/app/uploads"
@@ -44,6 +43,7 @@ if os.path.exists("/app/best_DRV.pth"):
     STATIC_DIR = "/app/static"
     MODEL_PATH = "/app/best_DRV.pth"
 else:
+    # Running locally
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
     UPLOAD_FOLDER = os.path.join(ROOT_DIR, "uploads")
@@ -51,6 +51,7 @@ else:
     STATIC_DIR = os.path.join(ROOT_DIR, "static")
     MODEL_PATH = os.path.join(ROOT_DIR, "best_DRV.pth")
 
+# Ensure the upload folder exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..")))
@@ -59,13 +60,16 @@ from model.DRV import HybridSimilarityModel
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 class WallpaperRecommender:
-    def __init__(self, model_name="asianyryn/DR50V16", device=None):
+    def __init__(self, model_name="asianrynn/DR50V16", device=None):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
 
-        # Load model from Hugging Face Hub
-        model_file = hf_hub_download(repo_id=model_name, filename="best_DRV.pth")
+        # Fetch Hugging Face Token from environment
+        huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
+
+        # Load model from Hugging Face Hub with authentication token
+        model_file = hf_hub_download(repo_id=model_name, filename="best_DRV.pth", use_auth_token=huggingface_token)
         self.model = HybridSimilarityModel(embedding_size=128)
         self.model.eval().to(self.device)
 
@@ -98,8 +102,97 @@ class WallpaperRecommender:
         return emb.cpu().numpy().flatten()
 
     def _get_embeddings_from_db(self, sku=None):
-        # Your DB fetching code stays the same
-        pass
+        """
+        Fetches columns: SKU, Product_Type, UOM, Inventory_Internal,
+        Image_1 ... Image_8, and Embeddings.
+        """
+        try:
+            IS_CI_CD = os.getenv("GITHUB_ACTIONS") == "true"
+
+            if IS_CI_CD:
+                DB_HOST = os.getenv("DB_HOST")
+                DB_PORT = int(os.getenv("DB_PORT", 3306))
+                DB_USER = os.getenv("DB_USER", "test_user")
+                DB_PASSWORD = os.getenv("DB_PASSWORD", "test_password")
+                DB_NAME = os.getenv("DB_NAME", "test_db")
+                print("🔹 Using **CLOUD MySQL (CI/CD Mode)**")
+            else:
+                DB_HOST = "host.docker.internal" if os.getenv('DOCKER') == 'true' else "srv1630.hstgr.io"
+                DB_PORT = int(os.getenv("DB_PORT", 3306))
+                DB_USER = os.getenv("DB_USER", "root")
+                DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+                DB_NAME = os.getenv("DB_NAME")
+                print("🖥️ Using **LOCAL MySQL (Development Mode)**")
+
+            conn = mysql.connector.connect(
+                host=DB_HOST,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+                port=DB_PORT
+            )
+
+            cursor = conn.cursor(dictionary=True)
+
+            query = """
+                SELECT SKU, `Product_Type`, UOM, Inventory_Internal, 
+                    Image_1, Image_2, Image_3, Image_4, Image_5, Image_6, Image_7, Image_8, Embeddings
+                FROM embeddings 
+                WHERE SKU NOT LIKE '%_aug'
+            """
+            if sku:
+                query += " AND SKU = %s"
+                cursor.execute(query, (sku,))
+            else:
+                cursor.execute(query)
+
+            results = cursor.fetchall()
+            cursor.close()
+            conn.close()
+
+            parsed_results = []
+            for row in results:
+                try:
+                    file_path = row["Image_1"]
+                    if os.getenv('DOCKER') == 'true':
+                        local_path_prefix = "C:/Users/User/OneDrive/Desktop/Wallpaper&Carpets Sdn Bhd/Datasets/Processed Wallpaper Dataset"
+                        docker_mount_prefix = "/app/dataset"
+                        if file_path.startswith(local_path_prefix):
+                            file_path = docker_mount_prefix + file_path[len(local_path_prefix):]
+
+                    file_path = file_path.replace("\\", "/").strip()
+                    embedding_data = json.loads(row["Embeddings"])
+                    if not embedding_data or (isinstance(embedding_data, dict) and not embedding_data):
+                        continue
+                    if isinstance(embedding_data, dict) and "embedding" in embedding_data:
+                        embedding_data = embedding_data["embedding"]
+                    if not isinstance(embedding_data, list) or len(embedding_data) == 0:
+                        continue
+
+                    parsed_results.append({
+                        "SKU": row["SKU"].strip(),
+                        "Product_Type": row["Product_Type"].strip(),
+                        "UOM": row["UOM"].strip(),
+                        "Inventory_Internal": row["Inventory_Internal"],
+                        "Image_1": file_path,
+                        "Image_2": row["Image_2"],
+                        "Image_3": row["Image_3"],
+                        "Image_4": row["Image_4"],
+                        "Image_5": row["Image_5"],
+                        "Image_6": row["Image_6"],
+                        "Image_7": row["Image_7"],
+                        "Image_8": row["Image_8"],
+                        "Embeddings": embedding_data
+                    })
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding JSON for SKU {row['SKU']}: {e}")
+            return parsed_results
+
+        except mysql.connector.Error as err:
+            print(f"Database error: {err}")
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+        return []
 
     def _cosine_similarity(self, a, b):
         dot = np.dot(a, b)
@@ -131,12 +224,18 @@ class WallpaperRecommender:
 # Initialize recommender
 recommender = WallpaperRecommender()
 
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+
 @app.post("/recommendations/filename")
 async def get_recommendations_by_sku(request: Request):
+    """
+    Accepts a JSON body with key "filename" (the SKU)
+    and returns recommendations based on the primary image.
+    """
     body = await request.json()
     sku = body.get("filename")
     if not sku:
@@ -168,6 +267,7 @@ async def get_recommendations_by_sku(request: Request):
         "image_url": main_image_url
     }
 
+
 @app.post("/recommendations/")
 async def get_recommendations(file: UploadFile = File(...)):
     if not file.filename:
@@ -191,17 +291,59 @@ async def get_recommendations(file: UploadFile = File(...)):
         })
     return {"recommendations": formatted_recommendations}
 
+
 @app.get("/dataset_image")
 async def dataset_image(file: str):
     image_path = unquote(file)
     if image_path.startswith("http"):
         return RedirectResponse(url=image_path)
+    if os.getenv('DOCKER') == 'true':
+        docker_mount_prefix = "/app/dataset"
+        local_path_prefix = "C:/Users/User/OneDrive/Desktop/Wallpaper&Carpets Sdn Bhd/Datasets/Processed Wallpaper Dataset"
+        if image_path.startswith(local_path_prefix):
+            image_path = docker_mount_prefix + image_path[len(local_path_prefix):]
     image_path = os.path.normpath(os.path.abspath(image_path))
     if not os.path.exists(image_path):
         raise HTTPException(status_code=404, detail="File not found.")
     return FileResponse(image_path)
 
-# Scheduler code remains the same...
+##############################################
+#              SCHEDULER SECTION             #
+##############################################
+def scheduled_task():
+    """Run update_db.py then precompute_embeddings.py once every 5 seconds (for testing)."""
+    try:
+        # Import update_db and precompute_embeddings functions
+        from embeddings.update_db import main as update_db  
+        from embeddings.precompute_embeddings import main as precompute_embeddings  
+
+        print("🔄 Scheduled task started: Updating database from Google Sheets...")
+        update_db()  # Calls update_db.main() to update MySQL
+        print("✅ Database update completed.")
+
+        # Wait to ensure the database commits are fully settled
+        import time
+        print("⏳ Waiting for database commits to settle...")
+        time.sleep(5)
+
+        print("🔄 Starting embeddings precomputation...")
+        precompute_embeddings()  # Calls precompute_embeddings.main() to compute new embeddings
+        print("✅ Precompute embeddings completed.")
+
+    except Exception as e:
+        print("❌ Error in scheduled task:", e)
+        traceback.print_exc()
+
+# Initialize the APScheduler background scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(scheduled_task, 'interval', hours=24)  # run every 24 hrs
+scheduler.start()
+print("⏰ Scheduler started: Task will run every 5 seconds.")
+
+
+##############################################
+#            END SCHEDULER SECTION           #
+##############################################
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8080)
