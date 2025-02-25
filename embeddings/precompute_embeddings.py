@@ -6,9 +6,11 @@ from PIL import Image
 import torchvision.transforms as T
 import json
 from dotenv import load_dotenv
+from huggingface_hub import hf_hub_download
 
 load_dotenv()
 
+# Database connection configuration from environment variables
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")  
@@ -35,10 +37,17 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from model.DRV import HybridSimilarityModel 
 
-# Load pre-trained model
+# Use the Hugging Face API to download the model from the Hugging Face Hub
+def download_model_from_huggingface():
+    model_name = "asianrynn/DR50V16"  # The model's name on Hugging Face Hub
+    model_file = hf_hub_download(repo_id=model_name, filename="best_DRV.pth")
+    return model_file
+
+# Load the pre-trained model
+model_file_path = download_model_from_huggingface()
 model = HybridSimilarityModel(embedding_size=128).to(device)
 model.eval()
-state_dict = torch.load("best_DRS.pth", map_location=device)
+state_dict = torch.load(model_file_path, map_location=device)
 model.load_state_dict(state_dict)
 
 # Define transformation for image preprocessing
