@@ -16,3 +16,4 @@ lightly
 apscheduler
 transformers
 huggingface_hub
+gunicorn
