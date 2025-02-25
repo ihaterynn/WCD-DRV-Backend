@@ -15,4 +15,4 @@ httpx
 lightly
 apscheduler
 transformers
-huggingface
+huggingface_hub
