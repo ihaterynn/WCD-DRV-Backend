@@ -3,7 +3,7 @@ import sys
 import torch
 import mysql.connector
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -307,6 +307,35 @@ async def dataset_image(file: str):
         raise HTTPException(status_code=404, detail="File not found.")
     return FileResponse(image_path)
 
+
+@app.get("/proxy-image")
+async def proxy_image(url: str):
+    """Proxies an external image through the backend to avoid CORS issues"""
+    try:
+        # Prevent recursive proxy calls 
+        if "/proxy-image" in url:
+            # Extract the original URL from a recursive proxy call
+            final_url = unquote(url.split("url=")[-1])
+            url = final_url
+            
+        # Fetch the external image
+        response = requests.get(url, stream=True, timeout=15)
+        response.raise_for_status()
+        
+        # Return the image with CORS headers
+        return Response(
+            content=response.content, 
+            media_type=response.headers.get("Content-Type", "image/jpeg"),
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "public, max-age=86400"
+            }
+        )
+    except Exception as e:
+        print(f"Error proxying image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error proxying image: {str(e)}")
+
+
 ##############################################
 #              SCHEDULER SECTION             #
 ##############################################
@@ -338,7 +367,7 @@ def scheduled_task():
 scheduler = BackgroundScheduler()
 scheduler.add_job(scheduled_task, 'interval', hours=24)  # run every 24 hrs
 scheduler.start()
-print("⏰ Scheduler started: Task will run every 5 seconds.")
+print("⏰ Scheduler started: Task will run every 24 hours.")
 
 
 ##############################################
